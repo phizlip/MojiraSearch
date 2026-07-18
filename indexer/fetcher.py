@@ -23,6 +23,9 @@ async def fetch_issue(
                 if not raw or not raw.strip():
                     logger.warning("Empty body for %s — treating as missing", key)
                     return None, 404
+                if raw.strip() == b"Issue not found":
+                    logger.debug("Missing (Issue not found body): %s", key)
+                    return None, 404
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:

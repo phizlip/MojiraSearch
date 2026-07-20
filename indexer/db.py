@@ -55,6 +55,7 @@ def open_db(path: str = DB_PATH) -> sqlite3.Connection:
     _ensure_data_dir()
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     conn.commit()

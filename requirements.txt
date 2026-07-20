@@ -1,5 +1,8 @@
 aiohttp>=3.9
+python-dotenv>=1.0
+sentence-transformers>=3.0.0
+torch>=2.0
 qdrant-client>=1.9.0
 fastapi[standard]>=0.110.0
 uvicorn>=0.30.0
-python-dotenv>=1.0.0
+einops>=0.7.0

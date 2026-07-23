@@ -3,8 +3,6 @@ import logging
 import os
 import sqlite3
 import sys
-import threading
-
 from dotenv import load_dotenv
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -116,33 +114,22 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
     return total_embedded
 
 
-def run_worker() -> None:
+async def run_worker() -> None:
     conn = open_db()
-    
-    def worker_thread():
-        # Create a new event loop specific to this thread to prevent aiohttp from hanging.
-        loop = asyncio.new_event_loop()
-        
-        async def crawl():
-            async with aiohttp.ClientSession() as session:
-                while True:
-                    work_done = 0
-                    for project in PROJECTS:
-                        project = project.strip()
-                        work_done += await forward_sync(project, session, conn)
-                    
-                    if work_done == 0:
-                        logger.info("No work done. Sleeping for %ds...", IDLE_SLEEP)
-                        await asyncio.sleep(IDLE_SLEEP)
-                    else:
-                        await asyncio.sleep(5)
-                        
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(crawl())
 
-    t = threading.Thread(target=worker_thread)
-    t.start()
-    t.join()
+    async with aiohttp.ClientSession() as session:
+        while True:
+            work_done = 0
+
+            for project in PROJECTS:
+                project = project.strip()
+                work_done += await forward_sync(project, session, conn)
+
+            if work_done == 0:
+                logger.info("No work done. Sleeping for %ds...", IDLE_SLEEP)
+                await asyncio.sleep(IDLE_SLEEP)
+            else:
+                await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
@@ -152,4 +139,4 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    run_worker()
+    asyncio.run(run_worker())

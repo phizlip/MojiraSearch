@@ -119,9 +119,10 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
 def run_worker() -> None:
     conn = open_db()
     
-    loop = asyncio.get_event_loop()
-
     def worker_thread():
+        # Create a new event loop specific to this thread to prevent aiohttp from hanging.
+        loop = asyncio.new_event_loop()
+        
         async def crawl():
             async with aiohttp.ClientSession() as session:
                 while True:

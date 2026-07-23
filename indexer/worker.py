@@ -12,7 +12,7 @@ import aiohttp
 from datetime import datetime, timezone
 
 from indexer.db import (
-    open_db, get_max_key_num, update_crawl_state, upsert_issue, upsert_missing, set_indexed
+    open_db, get_known_keys, get_max_key_num, update_crawl_state, upsert_issue, upsert_missing, set_indexed
 )
 from indexer.fetcher import fetch_issue
 from indexer.parser import build_embed_text, should_embed
@@ -84,6 +84,7 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
 
 async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection) -> int:
     """Crawl forward from the highest known key until 5 consecutive misses."""
+    known_keys = get_known_keys(conn, project)
     max_key = get_max_key_num(conn, project)
     current_num = max_key + 1
     total_embedded = 0
@@ -94,7 +95,8 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
         for _ in range(BATCH_SIZE):
             key = f"{project}-{current_num}"
             current_num += 1
-            batch_keys.append(key)
+            if key not in known_keys:
+                batch_keys.append(key)
 
         if not batch_keys:
             consecutive_missing += BATCH_SIZE

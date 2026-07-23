@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", DEFAULT_MODEL)
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+EMBEDDING_THREADS = int(os.getenv("EMBEDDING_THREADS", "2"))
 PREFIX_DOCUMENT = "search_document: "
 PREFIX_QUERY = "search_query: "
 
@@ -16,10 +17,13 @@ _model = None
 
 
 def get_model() -> SentenceTransformer:
+    """Lazy-load the SentenceTransformer model."""
     global _model
     if _model is None:
         import torch
         logger.info("Loading embedding model %s (trust_remote_code=True)...", MODEL_NAME)
+        torch.set_num_threads(EMBEDDING_THREADS)
+        # MPS will use 100% of unified memory on MacOS
         device = "cpu"
         _model = SentenceTransformer(MODEL_NAME, device=device, trust_remote_code=True)
         _model.eval()

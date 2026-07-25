@@ -17,6 +17,7 @@ from indexer.db import (
 from indexer.fetcher import fetch_issue
 from indexer.parser import build_embed_text, should_embed
 from indexer.embedder import embed_documents
+from api.qdrant_client import init_collection, upsert_issues, delete_issues
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
 
     valid_issues_for_embedding = []
     texts_for_embedding = []
+    keys_to_delete = []
     mutations_count = 0
     success_count = 0
 
@@ -46,6 +48,7 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
         data, status = result
         if status == 404:
             upsert_missing(conn, key=key, http_status=404)
+            keys_to_delete.append(key)
             mutations_count += 1
             continue
 
@@ -71,12 +74,19 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
                 text = build_embed_text(data)
                 valid_issues_for_embedding.append(data)
                 texts_for_embedding.append(text)
+            else:
+                keys_to_delete.append(key)
 
     if valid_issues_for_embedding:
         vectors = embed_documents(texts_for_embedding)
+        upsert_issues(valid_issues_for_embedding, vectors)
         for issue in valid_issues_for_embedding:
             set_indexed(conn, key=issue["key"], indexed=True)
         logger.info("Embedded and indexed %d issues (%s to %s)", len(valid_issues_for_embedding), keys[0], keys[-1])
+
+    if keys_to_delete:
+        delete_issues(keys_to_delete)
+        logger.info("Purged %d invalid/missing issues from Qdrant", len(keys_to_delete))
 
     embed_count = len(valid_issues_for_embedding)
     return mutations_count, success_count, embed_count
@@ -118,6 +128,7 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
 
 async def run_worker() -> None:
     conn = open_db()
+    init_collection()
 
     async with aiohttp.ClientSession() as session:
         while True:

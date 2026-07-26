@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 load_dotenv()
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -44,11 +44,16 @@ class SearchResponse(BaseModel):
 def search_issues(
     q: str = Query(..., min_length=2, description="Natural language query"),
     project: Optional[str] = Query(None, description="Filter by project code (e.g. MC)"),
+    sort: str = Query("relevance", regex="^(relevance|newest)$"),
     limit: int = Query(20, ge=1, le=100)
 ):
-    logger.info("Search query: '%s' (project=%s)", q, project)
+    logger.info("Search query: '%s' (project=%s, sort=%s)", q, project, sort)
     query_vector = embed_query(q)
-    results = search(query_vector=query_vector, limit=limit, project=project)
+    fetch_limit = 100 if sort == "newest" else limit
+    results = search(query_vector=query_vector, limit=fetch_limit, project=project)
+    if sort == "newest":
+        results.sort(key=lambda r: int(r["key"].split("-")[1]), reverse=True)
+        results = results[:limit]
     return {"results": results}
 
 

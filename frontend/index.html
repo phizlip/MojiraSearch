@@ -60,6 +60,11 @@
             font-weight: normal;
         }
 
+        select {
+            cursor: pointer;
+            width: max-content;
+        }
+
         input[type="text"]:focus,
         select:focus,
         button:focus,
@@ -170,6 +175,7 @@
                 gap: 0.75rem;
             }
 
+            select,
             button {
                 width: 100%;
             }
@@ -196,6 +202,19 @@
         <h1>MojiraSearch</h1>
 
         <div class="search-section" id="searchWrapper">
+            <select id="projectSelect" title="Target Project" autocomplete="off">
+                <option value="">All Projects</option>
+                <option value="MC">MC</option>
+                <option value="MCPE">MCPE</option>
+                <option value="MCL">MCL</option>
+                <option value="REALMS">REALMS</option>
+                <option value="WEB">WEB</option>
+                <option value="BDS">BDS</option>
+            </select>
+            <select id="sortOrder" title="Sort Order" autocomplete="off">
+                <option value="relevance">Relevance</option>
+                <option value="newest">Newest</option>
+            </select>
             <input type="text" id="searchInput" placeholder="Describe a bug report" autocomplete="off" autofocus>
             <button id="searchBtn">Search</button>
         </div>
@@ -208,11 +227,16 @@
         const API_BASE = '/api';
 
         const searchInput = document.getElementById('searchInput');
+        const projectSelect = document.getElementById('projectSelect');
+        const sortOrder = document.getElementById('sortOrder');
         const searchBtn = document.getElementById('searchBtn');
         const resultsContainer = document.getElementById('results');
         const searchWrapper = document.getElementById('searchWrapper');
 
+        // reset inputs on load
         window.onload = () => {
+            projectSelect.value = '';
+            sortOrder.value = 'relevance';
             searchInput.value = '';
             searchInput.placeholder = 'Describe a bug report';
         };
@@ -259,9 +283,15 @@
             const query = searchInput.value.trim();
             if (!query) return;
 
+            const currentProject = projectSelect.value;
+            const sort = sortOrder.value;
+
             searchWrapper.classList.add('loading');
             try {
-                const url = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
+                let url = `${API_BASE}/search?q=${encodeURIComponent(query)}&sort=${sort}`;
+                if (currentProject) {
+                    url += `&project=${currentProject}`;
+                }
                 const res = await fetch(url);
                 if (!res.ok) {
                     throw new Error("API Error: " + res.statusText);
@@ -279,6 +309,12 @@
         searchBtn.addEventListener('click', performSearch);
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') performSearch();
+        });
+        projectSelect.addEventListener('change', () => {
+            if (searchInput.value.trim()) performSearch();
+        });
+        sortOrder.addEventListener('change', () => {
+            if (searchInput.value.trim()) performSearch();
         });
 
 

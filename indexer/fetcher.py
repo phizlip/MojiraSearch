@@ -95,9 +95,9 @@ async def fetch_issue(
                         logger.debug("404 for %s", key)
                         return None, 404
                     elif resp.status == 429:
-                        wait = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_MAX)
-                        logger.warning("429 for %s — sleeping %.1fs", key, wait)
-                        await asyncio.sleep(wait)
+                        retry_after = float(resp.headers.get("Retry-After", _BACKOFF_BASE * (2 ** attempt)))
+                        logger.warning("429 for %s — sleeping %.1fs", key, retry_after)
+                        await asyncio.sleep(min(retry_after, _BACKOFF_MAX))
                     elif resp.status >= 500:
                         wait = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_MAX)
                         logger.warning("%d for %s — backoff %.1fs", resp.status, key, wait)

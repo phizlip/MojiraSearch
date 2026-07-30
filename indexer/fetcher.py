@@ -57,6 +57,148 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _semaphore
 
 
+def _normalize_jira_direct(raw: dict) -> dict:
+    """
+    Normalize a Jira REST API v2 response from bugs.mojang.com to the flat dict
+    shape that parser.py / worker.py expect (same as mojira.dev/api/v1/issues/<key>).
+
+    Custom field IDs verified against misode-investigation/api/public.go:
+        customfield_10054  -> confirmationStatus
+        customfield_10055  -> category (multi-select)
+        customfield_10049  -> mojangPriority
+        customfield_10050  -> ado
+        customfield_10063  -> platform
+        customfield_10061  -> osVersion
+        customfield_10056  -> realmsPlatform
+        customfield_10051  -> area
+        customfield_10070  -> votes
+    """
+    key = raw.get("key", "")
+    fields = raw.get("fields") or {}
+
+    def _adf_to_str(value) -> str:
+        """ADF may arrive as a dict (REST v2) — stringify it for parser.py."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value)
+        except Exception:
+            return ""
+
+    def _select_value(field) -> str:
+        if field is None:
+            return ""
+        if isinstance(field, dict):
+            return field.get("value") or field.get("name") or ""
+        return str(field)
+
+    def _name_list(items: list) -> list[str]:
+        return [i.get("name", "") for i in (items or []) if i.get("name")]
+
+    reporter = fields.get("reporter") or {}
+    assignee = fields.get("assignee") or {}
+    reporter_avatars = reporter.get("avatarUrls") or {}
+    assignee_avatars = assignee.get("avatarUrls") or {}
+
+    resolution_obj = fields.get("resolution") or {}
+    resolution = resolution_obj.get("name", "") if isinstance(resolution_obj, dict) else ""
+
+    status_obj = fields.get("status") or {}
+    status = status_obj.get("name", "") if isinstance(status_obj, dict) else ""
+
+    category_raw = fields.get("customfield_10055") or []
+    category = [c.get("value", "") for c in category_raw if isinstance(c, dict) and c.get("value")]
+
+    issue_links = []
+    for link in (fields.get("issuelinks") or []):
+        link_type = link.get("type") or {}
+        outward = link.get("outwardIssue")
+        inward = link.get("inwardIssue")
+        if outward:
+            other_fields = outward.get("fields") or {}
+            issue_links.append({
+                "type": link_type.get("outward", ""),
+                "otherKey": outward.get("key", ""),
+                "otherSummary": other_fields.get("summary", ""),
+                "otherStatus": _select_value(other_fields.get("status")),
+            })
+        elif inward:
+            other_fields = inward.get("fields") or {}
+            issue_links.append({
+                "type": link_type.get("inward", ""),
+                "otherKey": inward.get("key", ""),
+                "otherSummary": other_fields.get("summary", ""),
+                "otherStatus": _select_value(other_fields.get("status")),
+            })
+
+    attachments = []
+    for att in (fields.get("attachment") or []):
+        att_author = att.get("author") or {}
+        att_avatars = att_author.get("avatarUrls") or {}
+        attachments.append({
+            "id": att.get("id", ""),
+            "filename": att.get("filename", ""),
+            "authorName": att_author.get("displayName", ""),
+            "authorAvatar": att_avatars.get("48x48", ""),
+            "created": att.get("created", ""),
+            "size": att.get("size", 0),
+            "mimeType": att.get("mimeType", ""),
+        })
+
+    comment_list = []
+    comment_block = fields.get("comment") or {}
+    for c in (comment_block.get("comments") or []):
+        c_author = c.get("author") or {}
+        c_avatars = c_author.get("avatarUrls") or {}
+        comment_list.append({
+            "id": c.get("id", ""),
+            "created": c.get("created", ""),
+            "authorName": c_author.get("displayName", ""),
+            "authorAvatar": c_avatars.get("48x48", ""),
+            # body may be ADF dict or plain string
+            "body": _adf_to_str(c.get("body", "")),
+        })
+
+    return {
+        "key": key,
+        "summary": fields.get("summary", ""),
+        "description": _adf_to_str(fields.get("description")),
+        "environment": _adf_to_str(fields.get("environment")),
+        "labels": fields.get("labels") or [],
+        "resolution": resolution,
+        "status": status,
+        "created_date": fields.get("created", ""),
+        "updated_date": fields.get("updated", ""),
+        "resolutionDate": fields.get("resolutiondate", ""),
+        "affectedVersions": _name_list(fields.get("versions")),
+        "fixVersions": _name_list(fields.get("fixVersions")),
+        "components": _name_list(fields.get("components")),
+        "confirmationStatus": _select_value(fields.get("customfield_10054")),
+        "category": category,
+        "mojangPriority": _select_value(fields.get("customfield_10049")),
+        "ado": fields.get("customfield_10050", "") or "",
+        "platform": (_select_value(fields.get("customfield_10063"))).strip(),
+        "osVersion": fields.get("customfield_10061", "") or "",
+        "realmsPlatform": _select_value(fields.get("customfield_10056")),
+        "area": _select_value(fields.get("customfield_10051")),
+        "votes": fields.get("customfield_10070", 0) or 0,
+        "reporter": {
+            "displayName": reporter.get("displayName", ""),
+            "avatarUrls": {"48x48": reporter_avatars.get("48x48", "")},
+        },
+        "assignee": {
+            "displayName": assignee.get("displayName", ""),
+            "avatarUrls": {"48x48": assignee_avatars.get("48x48", "")},
+        } if assignee else None,
+        "issueLinks": issue_links,
+        "attachments": attachments,
+        "comments": comment_list,
+        "_source": "jira_direct",
+    }
+
+
 async def fetch_issue_jira_direct(
     session: aiohttp.ClientSession,
     key: str,
@@ -97,7 +239,8 @@ async def fetch_issue_jira_direct(
                 issue_raw = issues[0]
                 if not issue_raw.get("key"):
                     issue_raw["key"] = key
-                return issue_raw, 200
+                normalized = _normalize_jira_direct(issue_raw)
+                return normalized, 200
             elif resp.status == 404:
                 logger.debug("Jira direct: 404 for %s", key)
                 return None, 404

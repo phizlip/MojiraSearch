@@ -11,6 +11,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 MOJIRA_BASE = "https://mojira.dev/api/v1/issues"
+JIRA_DIRECT_JQL = "https://bugs.mojang.com/api/jql-search-post"
 FETCH_CONCURRENCY = int(os.getenv("FETCH_CONCURRENCY", "5"))
 
 RATE_LIMIT_RPS = float(os.getenv("FETCH_RPS", "5.0"))
@@ -54,6 +55,58 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _semaphore is None:
         _semaphore = asyncio.Semaphore(FETCH_CONCURRENCY)
     return _semaphore
+
+
+async def fetch_issue_jira_direct(
+    session: aiohttp.ClientSession,
+    key: str,
+) -> tuple[Optional[dict], int]:
+    """Hit bugs.mojang.com directly when mojira.dev retries are exhausted."""
+    await _get_limiter().acquire()
+
+    project = key.split("-")[0]
+    payload = json.dumps({
+        "advanced": True,
+        "project": project,
+        "search": f"key = {key}",
+        "maxResults": 1,
+    }).encode()
+
+    logger.info("Fallback to Jira JQL direct for %s", key)
+    try:
+        async with session.post(
+            JIRA_DIRECT_JQL,
+            data=payload,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status in (200, 201):
+                raw = await resp.read()
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.warning("Jira direct: JSON decode failed for %s", key)
+                    return None, -1
+                issues = data.get("issues") or []
+                if not issues:
+                    logger.debug("Jira direct: no issues returned for %s (treating as 404)", key)
+                    return None, 404
+                issue_raw = issues[0]
+                if not issue_raw.get("key"):
+                    issue_raw["key"] = key
+                return issue_raw, 200
+            elif resp.status == 404:
+                logger.debug("Jira direct: 404 for %s", key)
+                return None, 404
+            else:
+                logger.error("Jira direct: %d for %s", resp.status, key)
+                return None, resp.status
+    except aiohttp.ClientError as exc:
+        logger.error("Jira direct network error for %s: %s", key, exc)
+        return None, -1
 
 
 async def fetch_issue(
@@ -110,8 +163,8 @@ async def fetch_issue(
                 logger.warning("Network error for %s (%s) — backoff %.1fs", key, exc, wait)
                 await asyncio.sleep(wait)
 
-        logger.error("Exhausted retries for %s", key)
-        return None, -1
+        logger.warning("mojira.dev retries exhausted for %s, trying Jira direct", key)
+        return await fetch_issue_jira_direct(session, key)
 
 
 async def fetch_issues_batch(
@@ -139,7 +192,7 @@ async def fetch_issues_batch(
 
 
 def make_session() -> aiohttp.ClientSession:
-    """Create a long-lived aiohttp session for use across many fetch calls."""
+    """Shared session for the worker, keeps connections alive between batches."""
     return aiohttp.ClientSession(
         headers={
             "Accept": "application/json",

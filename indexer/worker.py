@@ -221,7 +221,7 @@ async def run_worker() -> None:
                 project = project.strip()
                 delta_embedded, target_id = await delta_sync(project, session, conn)
                 work_done += delta_embedded
-                work_done += await forward_sync(project, session, conn)
+                work_done += await forward_sync(project, session, conn, target_num=target_id)
 
             if work_done == 0:
                 logger.info("No work done. Sleeping for %ds...", IDLE_SLEEP)

@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 from dotenv import load_dotenv
@@ -12,7 +14,8 @@ import aiohttp
 from datetime import datetime, timezone
 
 from indexer.db import (
-    open_db, get_known_keys, get_max_key_num, update_crawl_state, upsert_issue, upsert_missing, set_indexed
+    open_db, get_issue, get_max_key_num, get_recently_missing_keys,
+    update_crawl_state, upsert_issue, upsert_missing, set_delta_sync_time, set_indexed,
 )
 from indexer.fetcher import fetch_issue
 from indexer.parser import build_embed_text, should_embed
@@ -24,6 +27,38 @@ logger = logging.getLogger(__name__)
 PROJECTS = os.getenv("PROJECTS", "MC,MCPE").split(",")
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 IDLE_SLEEP = 300
+MAX_CONTIGUOUS_MISSING = 15
+MISSING_KEY_TTL_HOURS = 48.0
+
+STATUS_FILE = os.path.join(os.getenv("DATA_DIR", "./data"), "worker_status.json")
+
+
+def set_worker_status(project: str, phase: str, details: str = "") -> None:
+    try:
+        status = {
+            "project": project,
+            "phase": phase,
+            "details": details,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        with open(STATUS_FILE, "w") as f:
+            json.dump(status, f)
+    except Exception as e:
+        logger.error("Failed to write worker status: %s", e)
+
+
+async def fetch_recent_keys_html(project: str, session: aiohttp.ClientSession) -> set[str]:
+    url = f"https://mojira.dev/?project={project}&sort=-updated"
+    try:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                html = await resp.text()
+                pattern = rf'href="/({project}-\\d+)"'
+                matches = re.finditer(pattern, html)
+                return {m.group(1) for m in matches}
+    except Exception as e:
+        logger.warning("Failed to fetch recent HTML for %s: %s", project, e)
+    return set()
 
 
 async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: sqlite3.Connection) -> tuple[int, int, int]:
@@ -65,8 +100,13 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
                 data["key"] = key
 
             success_count += 1
+
+            existing = get_issue(conn, key)
+            new_updated = data.get("updated_date")
+            if existing and existing["updated_date"] == new_updated:
+                continue
+
             mutations_count += 1
-            
             is_valid = should_embed(data)
             upsert_issue(conn, issue=data, indexed=False, http_status=status)
 
@@ -86,26 +126,36 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
 
     if keys_to_delete:
         delete_issues(keys_to_delete)
+        for key in keys_to_delete:
+            set_indexed(conn, key=key, indexed=False)
         logger.info("Purged %d invalid/missing issues from Qdrant", len(keys_to_delete))
 
     embed_count = len(valid_issues_for_embedding)
     return mutations_count, success_count, embed_count
 
 
-async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection) -> int:
-    """Crawl forward from the highest known key until 5 consecutive misses."""
-    known_keys = get_known_keys(conn, project)
+async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection, target_num: int = 0) -> int:
+    """
+    Crawl forward from the highest known key until MAX_CONTIGUOUS_MISSING consecutive
+    misses, or until target_num is reached (used to bridge gaps found via delta sync).
+    Returns the number of issues embedded.
+    """
+    recently_missing = get_recently_missing_keys(conn, project, max_age_hours=MISSING_KEY_TTL_HOURS)
+    skipped = len(recently_missing)
+    if skipped:
+        logger.debug("Forward sync %s: skipping %d recently-confirmed-missing keys", project, skipped)
+
     max_key = get_max_key_num(conn, project)
     current_num = max_key + 1
     total_embedded = 0
     consecutive_missing = 0
 
-    while consecutive_missing < 5:
+    while consecutive_missing < MAX_CONTIGUOUS_MISSING:
         batch_keys = []
         for _ in range(BATCH_SIZE):
             key = f"{project}-{current_num}"
             current_num += 1
-            if key not in known_keys:
+            if key not in recently_missing:
                 batch_keys.append(key)
 
         if not batch_keys:
@@ -113,6 +163,7 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
             continue
 
         logger.info("Forward sync %s: fetching %s to %s", project, batch_keys[0], batch_keys[-1])
+        set_worker_status(project, "Forward Sync", f"Fetching {batch_keys[0]} to {batch_keys[-1]}")
         batch_mutations, batch_successes, batch_embedded = await process_batch(batch_keys, session, conn)
         total_embedded += batch_embedded
 
@@ -126,9 +177,41 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
     return total_embedded
 
 
+async def delta_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection) -> tuple[int, int]:
+    """Reindex recently updated issues. Returns (embedded_count, max_id_seen)."""
+    logger.info("Delta sync %s: checking recently updated...", project)
+    set_worker_status(project, "Delta Sync", "Fetching updated issues from HTML...")
+    recent_keys = await fetch_recent_keys_html(project, session)
+    if not recent_keys:
+        return 0, 0
+
+    keys_list = list(recent_keys)
+    logger.info("Delta sync %s: found %d recent keys", project, len(keys_list))
+
+    max_id = 0
+    total_embedded = 0
+    for i in range(0, len(keys_list), BATCH_SIZE):
+        batch = keys_list[i:i+BATCH_SIZE]
+        _, _, batch_embedded = await process_batch(batch, session, conn)
+        total_embedded += batch_embedded
+
+        for k in batch:
+            try:
+                num = int(k.split("-")[1])
+                if num > max_id:
+                    max_id = num
+            except (IndexError, ValueError):
+                continue
+
+    set_delta_sync_time(conn, project)
+    return total_embedded, max_id
+
+
 async def run_worker() -> None:
     conn = open_db()
     init_collection()
+
+    embed_documents(["pre-warm"])
 
     async with aiohttp.ClientSession() as session:
         while True:
@@ -136,10 +219,13 @@ async def run_worker() -> None:
 
             for project in PROJECTS:
                 project = project.strip()
+                delta_embedded, target_id = await delta_sync(project, session, conn)
+                work_done += delta_embedded
                 work_done += await forward_sync(project, session, conn)
 
             if work_done == 0:
                 logger.info("No work done. Sleeping for %ds...", IDLE_SLEEP)
+                set_worker_status("All", "Idle", f"Sleeping for {IDLE_SLEEP}s")
                 await asyncio.sleep(IDLE_SLEEP)
             else:
                 await asyncio.sleep(5)

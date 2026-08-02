@@ -1,7 +1,9 @@
 """
+db.py — SQLite wrapper for crawl state tracking.
+
 Schema:
   issues       — one row per key ever seen (fetched, 404, or skipped)
-  crawl_state  — one row per project, tracking highest key seen
+  crawl_state  — one row per project, tracking highest key and delta sync time
 
 All timestamps stored as ISO-8601 UTC strings.
 """
@@ -30,15 +32,22 @@ CREATE TABLE IF NOT EXISTS issues (
     updated_date    TEXT,
     last_fetched    TEXT,
     indexed         INTEGER NOT NULL DEFAULT 0,
-    http_status     INTEGER NOT NULL DEFAULT 200
+    http_status     INTEGER NOT NULL DEFAULT 200,
+    duplicate_of    TEXT
+        REFERENCES issues(key) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project);
-CREATE INDEX IF NOT EXISTS idx_issues_indexed ON issues(indexed);
+CREATE INDEX IF NOT EXISTS idx_issues_project    ON issues(project);
+CREATE INDEX IF NOT EXISTS idx_issues_indexed    ON issues(indexed);
+CREATE INDEX IF NOT EXISTS idx_issues_resolution ON issues(resolution);
+CREATE INDEX IF NOT EXISTS idx_issues_updated    ON issues(updated_date);
+CREATE INDEX IF NOT EXISTS idx_issues_duplicate  ON issues(duplicate_of)
+    WHERE duplicate_of IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS crawl_state (
     project         TEXT PRIMARY KEY,
-    max_key_seen    INTEGER NOT NULL DEFAULT 0
+    max_key_seen    INTEGER NOT NULL DEFAULT 0,
+    last_delta_sync TEXT
 );
 """
 
@@ -73,7 +82,7 @@ def transaction(conn: sqlite3.Connection) -> Generator[sqlite3.Connection, None,
         conn.rollback()
         raise
 
-# Issue upserts
+
 
 def upsert_issue(conn: sqlite3.Connection, issue: dict, indexed: bool, http_status: int = 200) -> None:
     key = issue["key"]
@@ -138,7 +147,15 @@ def set_indexed(conn: sqlite3.Connection, key: str, indexed: bool) -> None:
             (1 if indexed else 0, key),
         )
 
-# Queries
+
+def set_duplicate_of(conn: sqlite3.Connection, key: str, canonical_key: str) -> None:
+    with transaction(conn):
+        conn.execute(
+            "UPDATE issues SET duplicate_of = ? WHERE key = ?",
+            (canonical_key, key),
+        )
+
+
 
 def get_issue(conn: sqlite3.Connection, key: str) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM issues WHERE key = ?", (key,)).fetchone()
@@ -158,6 +175,20 @@ def get_max_key_num(conn: sqlite3.Connection, project: str) -> int:
         "SELECT max_key_seen FROM crawl_state WHERE project = ?", (project,)
     ).fetchone()
     return row["max_key_seen"] if row else 0
+
+
+def get_recently_missing_keys(conn: sqlite3.Connection, project: str, max_age_hours: float = 48.0) -> set[str]:
+    """Return 404 keys last probed within max_age_hours (safe to skip in forward_sync)."""
+    rows = conn.execute(
+        """
+        SELECT key FROM issues
+        WHERE project = ?
+          AND http_status = 404
+          AND last_fetched >= datetime('now', ? || ' hours')
+        """,
+        (project, f"-{max_age_hours}"),
+    ).fetchall()
+    return {row["key"] for row in rows}
 
 
 def get_stats(conn: sqlite3.Connection) -> dict:
@@ -199,7 +230,7 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         },
     }
 
-# Crawl state
+
 
 def update_crawl_state(conn: sqlite3.Connection, project: str, max_key_seen: int) -> None:
     with transaction(conn):
@@ -212,3 +243,24 @@ def update_crawl_state(conn: sqlite3.Connection, project: str, max_key_seen: int
             """,
             (project, max_key_seen),
         )
+
+
+def set_delta_sync_time(conn: sqlite3.Connection, project: str, ts: Optional[str] = None) -> None:
+    if ts is None:
+        ts = _now_iso()
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO crawl_state (project, last_delta_sync)
+            VALUES (?, ?)
+            ON CONFLICT(project) DO UPDATE SET last_delta_sync = excluded.last_delta_sync
+            """,
+            (project, ts),
+        )
+
+
+def get_delta_sync_time(conn: sqlite3.Connection, project: str) -> Optional[str]:
+    row = conn.execute(
+        "SELECT last_delta_sync FROM crawl_state WHERE project = ?", (project,)
+    ).fetchone()
+    return row["last_delta_sync"] if row else None

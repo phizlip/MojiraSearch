@@ -14,6 +14,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -179,6 +180,41 @@ def api_status():
     except Exception as e:
         logger.error("DB error: %s", e)
         raise HTTPException(status_code=500, detail="Database error")
+
+
+@app.get("/api/status/stream")
+async def status_stream():
+    async def generate():
+        last_json: Optional[str] = None
+        ticks_since_heartbeat = 0
+        while True:
+            try:
+                data = await asyncio.get_event_loop().run_in_executor(
+                    None, _build_status_data
+                )
+                current_json = json.dumps(data, sort_keys=True)
+                if current_json != last_json:
+                    last_json = current_json
+                    yield f"data: {current_json}\n\n"
+            except Exception as e:
+                logger.error("SSE generator error: %s", e)
+
+            ticks_since_heartbeat += 1
+            if ticks_since_heartbeat >= 15:  # 15 x 2 s = 30 s
+                ticks_since_heartbeat = 0
+                yield ": heartbeat\n\n"
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

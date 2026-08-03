@@ -53,7 +53,7 @@ async def fetch_recent_keys_html(project: str, session: aiohttp.ClientSession) -
         async with session.get(url) as resp:
             if resp.status == 200:
                 html = await resp.text()
-                pattern = rf'href="/({project}-\\d+)"'
+                pattern = rf'href="/({project}-\d+)"'
                 matches = re.finditer(pattern, html)
                 return {m.group(1) for m in matches}
     except Exception as e:

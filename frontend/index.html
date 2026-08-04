@@ -60,11 +60,6 @@
             font-weight: normal;
         }
 
-        select {
-            cursor: pointer;
-            width: max-content;
-        }
-
         input[type="text"]:focus,
         select:focus,
         button:focus,
@@ -72,6 +67,11 @@
             /* keep border at 1px on focus */
             outline: none;
             border: 1px solid var(--fg);
+        }
+
+        select {
+            cursor: pointer;
+            width: max-content;
         }
 
         input[type="text"] {
@@ -156,7 +156,6 @@
         input::placeholder {
             color: var(--muted);
             opacity: 1;
-            /* Firefox fix */
         }
 
         /* Mobile Adjustments */
@@ -202,6 +201,10 @@
         <h1>MojiraSearch</h1>
 
         <div class="search-section" id="searchWrapper">
+            <select id="searchMode" title="Search Mode" autocomplete="off">
+                <option value="semantic">Semantic Search</option>
+                <option value="duplicate">Duplicate Check</option>
+            </select>
             <select id="projectSelect" title="Target Project" autocomplete="off">
                 <option value="">All Projects</option>
                 <option value="MC">MC</option>
@@ -215,11 +218,19 @@
                 <option value="relevance">Relevance</option>
                 <option value="newest">Newest</option>
             </select>
+            <select id="openWith" title="Open With" autocomplete="off">
+                <option value="mojira">mojira.dev</option>
+                <option value="bugs_legacy">bugs-legacy.mojang.com</option>
+                <option value="bugs">bugs.mojang.com</option>
+                <option value="report">report.bugs.mojang.com</option>
+                <option value="atlassian">mojira.atlassian.net</option>
+            </select>
             <input type="text" id="searchInput" placeholder="Describe a bug report" autocomplete="off" autofocus>
             <button id="searchBtn">Search</button>
         </div>
 
         <div class="results" id="results">
+
         </div>
     </div>
 
@@ -229,19 +240,28 @@
         const searchInput = document.getElementById('searchInput');
         const projectSelect = document.getElementById('projectSelect');
         const sortOrder = document.getElementById('sortOrder');
+        const openWith = document.getElementById('openWith');
+        const searchMode = document.getElementById('searchMode');
         const searchBtn = document.getElementById('searchBtn');
         const resultsContainer = document.getElementById('results');
         const searchWrapper = document.getElementById('searchWrapper');
 
         // reset inputs on load
         window.onload = () => {
+            searchMode.value = 'semantic';
             projectSelect.value = '';
             sortOrder.value = 'relevance';
+            openWith.value = 'mojira';
             searchInput.value = '';
             searchInput.placeholder = 'Describe a bug report';
         };
 
         function getIssueUrl(key) {
+            const tracker = openWith.value;
+            if (tracker === 'bugs_legacy') return `https://bugs-legacy.mojang.com/browse/${key}`;
+            if (tracker === 'bugs')        return `https://bugs.mojang.com/browse/${key}`;
+            if (tracker === 'report')      return `https://report.bugs.mojang.com/servicedesk/customer/portal/2/${key}`;
+            if (tracker === 'atlassian')   return `https://mojira.atlassian.net/browse/${key}`;
             return `https://mojira.dev/${key}`;
         }
 
@@ -283,17 +303,31 @@
             const query = searchInput.value.trim();
             if (!query) return;
 
+            const mode = searchMode.value;
             const currentProject = projectSelect.value;
-            const sort = sortOrder.value;
 
             searchWrapper.classList.add('loading');
             try {
-                let url = `${API_BASE}/search?q=${encodeURIComponent(query)}&sort=${sort}`;
-                if (currentProject) {
-                    url += `&project=${currentProject}`;
+                let url;
+
+                if (mode === 'duplicate') {
+                    const sort = sortOrder.value;
+                    url = `${API_BASE}/similar/${query.toUpperCase()}?sort=${sort}`;
+                    if (currentProject) {
+                        url += `&project=${currentProject}`;
+                    }
+                } else {
+                    const sort = sortOrder.value;
+                    url = `${API_BASE}/search?q=${encodeURIComponent(query)}&sort=${sort}`;
+                    if (currentProject) {
+                        url += `&project=${currentProject}`;
+                    }
                 }
+
                 const res = await fetch(url);
                 if (!res.ok) {
+                    if (res.status === 404) throw new Error("Issue key not found in index.");
+                    if (res.status === 400) throw new Error("Invalid issue key format (e.g. MC-6767).");
                     throw new Error("API Error: " + res.statusText);
                 }
                 const data = await res.json();
@@ -306,6 +340,15 @@
             }
         }
 
+        searchMode.addEventListener('change', () => {
+            if (searchMode.value === 'duplicate') {
+                searchInput.placeholder = "Enter an issue key (e.g. MC-6767)";
+            } else {
+                searchInput.placeholder = "Describe a bug report";
+            }
+            if (searchInput.value.trim()) performSearch();
+        });
+
         searchBtn.addEventListener('click', performSearch);
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') performSearch();
@@ -314,6 +357,9 @@
             if (searchInput.value.trim()) performSearch();
         });
         sortOrder.addEventListener('change', () => {
+            if (searchInput.value.trim()) performSearch();
+        });
+        openWith.addEventListener('change', () => {
             if (searchInput.value.trim()) performSearch();
         });
 

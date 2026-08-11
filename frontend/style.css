@@ -14,7 +14,7 @@ body {
     background-color: var(--bg);
     color: var(--fg);
     margin: 0;
-    padding: 3rem 1.5rem;
+    padding: 3rem 1.5rem 4rem;
     display: flex;
     justify-content: center;
     line-height: 1.5;
@@ -206,6 +206,32 @@ button:hover {
 input::placeholder {
     color: var(--muted);
     opacity: 1;
+}
+
+.page-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1.5rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+.footer-github {
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.footer-github:hover {
+    opacity: 0.6;
 }
 
 /* Mobile Adjustments */

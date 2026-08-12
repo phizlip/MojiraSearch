@@ -15,9 +15,9 @@ from datetime import datetime, timezone
 
 from indexer.db import (
     open_db, get_issue, get_max_key_num, get_recently_missing_keys,
-    update_crawl_state, upsert_issue, upsert_missing, set_delta_sync_time, set_indexed,
+    update_crawl_state, upsert_issue, upsert_missing, set_delta_sync_time, set_indexed, get_delta_sync_time
 )
-from indexer.fetcher import fetch_issue
+from indexer.fetcher import fetch_issue, fetch_recent_keys_jql
 from indexer.parser import build_embed_text, should_embed
 from indexer.embedder import embed_documents
 from api.qdrant_client import init_collection, upsert_issues, delete_issues
@@ -47,18 +47,7 @@ def set_worker_status(project: str, phase: str, details: str = "") -> None:
         logger.error("Failed to write worker status: %s", e)
 
 
-async def fetch_recent_keys_html(project: str, session: aiohttp.ClientSession) -> set[str]:
-    url = f"https://mojira.dev/?project={project}&sort=-updated"
-    try:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                html = await resp.text()
-                pattern = rf'href="/({project}-\d+)"'
-                matches = re.finditer(pattern, html)
-                return {m.group(1) for m in matches}
-    except Exception as e:
-        logger.warning("Failed to fetch recent HTML for %s: %s", project, e)
-    return set()
+
 
 
 async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: sqlite3.Connection) -> tuple[int, int, int]:
@@ -150,7 +139,7 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
     total_embedded = 0
     consecutive_missing = 0
 
-    while consecutive_missing < MAX_CONTIGUOUS_MISSING:
+    while consecutive_missing < MAX_CONTIGUOUS_MISSING or current_num <= target_num:
         batch_keys = []
         for _ in range(BATCH_SIZE):
             key = f"{project}-{current_num}"
@@ -179,9 +168,10 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
 
 async def delta_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection) -> tuple[int, int]:
     """Reindex recently updated issues. Returns (embedded_count, max_id_seen)."""
-    logger.info("Delta sync %s: checking recently updated...", project)
-    set_worker_status(project, "Delta Sync", "Fetching updated issues from HTML...")
-    recent_keys = await fetch_recent_keys_html(project, session)
+    last_sync = get_delta_sync_time(conn, project)
+    logger.info("Delta sync %s: checking recently updated since %s...", project, last_sync)
+    set_worker_status(project, "Delta Sync", f"Fetching updated issues since {last_sync}...")
+    recent_keys = await fetch_recent_keys_jql(session, project, last_sync or "")
     if not recent_keys:
         return 0, 0
 

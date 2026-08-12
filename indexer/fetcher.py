@@ -310,6 +310,55 @@ async def fetch_issue(
         return await fetch_issue_jira_direct(session, key)
 
 
+async def fetch_recent_keys_jql(
+    session: aiohttp.ClientSession,
+    project: str,
+    last_sync_time: str,
+) -> set[str]:
+    """Fetch recently updated issue keys directly from Jira JQL."""
+    await _get_limiter().acquire()
+
+    try:
+        import datetime
+        dt = datetime.datetime.fromisoformat(last_sync_time)
+        jql_date = dt.strftime("%Y-%m-%d %H:%M")
+        jql = f'project = {project} AND updated >= "{jql_date}" ORDER BY updated DESC'
+    except Exception as e:
+        logger.warning("Failed to parse last_sync_time %r: %s", last_sync_time, e)
+        jql = f'project = {project} AND updated >= "-48h" ORDER BY updated DESC'
+
+    payload = json.dumps({
+        "advanced": True,
+        "project": project,
+        "search": jql,
+        "maxResults": 100,
+    }).encode()
+
+    try:
+        async with session.post(
+            JIRA_DIRECT_JQL,
+            data=payload,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status in (200, 201):
+                raw = await resp.read()
+                data = json.loads(raw)
+                issues = data.get("issues") or []
+                keys = {issue.get("key") for issue in issues if issue.get("key")}
+                logger.info("JQL delta_sync for %s found %d keys", project, len(keys))
+                return keys
+            else:
+                logger.error("JQL delta_sync returned %d for %s", resp.status, project)
+                return set()
+    except Exception as exc:
+        logger.error("JQL delta_sync network error for %s: %s", project, exc)
+        return set()
+
+
 async def fetch_issues_batch(
     keys: list[str],
     session: Optional[aiohttp.ClientSession] = None,

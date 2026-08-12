@@ -30,7 +30,7 @@ The indexer runs two passes per project on each cycle:
 
 ## Duplicate detection
 
-Switch to Duplicate Check mode and enter an issue key (e.g. `MC-12345`). The frontend queries `/api/similar/{key}` and returns the closest matches.
+Switch to Duplicate Check mode and enter an issue key (e.g. `MC-12345`). The frontend queries `/api/similar/{key}` and returns the closest matches. Please note that detection may not always be accurate, so always double check the results yourself.
 
 ## AI Disclosure
 

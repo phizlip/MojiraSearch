@@ -14,7 +14,10 @@ MOJIRA_BASE = "https://mojira.dev/api/v1/issues"
 JIRA_DIRECT_JQL = "https://bugs.mojang.com/api/jql-search-post"
 FETCH_CONCURRENCY = int(os.getenv("FETCH_CONCURRENCY", "5"))
 
+# Rate limit for mojira.dev individual issue fetches
 RATE_LIMIT_RPS = float(os.getenv("FETCH_RPS", "5.0"))
+# Rate limit for bugs.mojang.com JQL calls (delta sync + fallback)
+JQL_RATE_LIMIT_RPS = float(os.getenv("JQL_FETCH_RPS", "3.0"))
 
 _BACKOFF_BASE = 2.0
 _BACKOFF_MAX = 60.0
@@ -40,14 +43,24 @@ class RateLimiter:
 
 
 _rate_limiter: Optional[RateLimiter] = None
+_jql_limiter: Optional[RateLimiter] = None
 _semaphore: Optional[asyncio.Semaphore] = None
 
 
 def _get_limiter() -> RateLimiter:
+    """Rate limiter for mojira.dev individual issue fetches."""
     global _rate_limiter
     if _rate_limiter is None:
         _rate_limiter = RateLimiter(RATE_LIMIT_RPS)
     return _rate_limiter
+
+
+def _get_jql_limiter() -> RateLimiter:
+    """Rate limiter for bugs.mojang.com JQL calls (delta sync + fallback)."""
+    global _jql_limiter
+    if _jql_limiter is None:
+        _jql_limiter = RateLimiter(JQL_RATE_LIMIT_RPS)
+    return _jql_limiter
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -204,7 +217,7 @@ async def fetch_issue_jira_direct(
     key: str,
 ) -> tuple[Optional[dict], int]:
     """Hit bugs.mojang.com directly when mojira.dev retries are exhausted."""
-    await _get_limiter().acquire()
+    await _get_jql_limiter().acquire()
 
     project = key.split("-")[0]
     payload = json.dumps({
@@ -316,8 +329,6 @@ async def fetch_recent_keys_jql(
     last_sync_time: str,
 ) -> set[str]:
     """Fetch recently updated issue keys directly from Jira JQL."""
-    await _get_limiter().acquire()
-
     try:
         import datetime
         dt = datetime.datetime.fromisoformat(last_sync_time)
@@ -339,7 +350,7 @@ async def fetch_recent_keys_jql(
 
     try:
         while True:
-            await _get_limiter().acquire()
+            await _get_jql_limiter().acquire()
             async with session.post(
                 JIRA_DIRECT_JQL,
                 json=payload,

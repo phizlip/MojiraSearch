@@ -41,6 +41,21 @@ def init_collection() -> None:
     else:
         logger.debug("Qdrant collection '%s' already exists", COLLECTION_NAME)
 
+    keyword_fields = ["project", "resolution", "status", "confirmation_status"]
+    array_fields = ["labels", "fix_versions", "affected_versions"]
+    for field in keyword_fields:
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name=field,
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+    for field in array_fields:
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name=field,
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
+
 
 def _key_to_uuid(key: str) -> str:
     """Deterministic UUID from a Mojira key like 'MC-4'."""
@@ -73,7 +88,12 @@ def upsert_issues(issues: List[Dict[str, Any]], vectors: List[List[float]]) -> N
             "status": issue.get("status"),
             "updated_date": issue.get("updated_date"),
             "votes": issue.get("votes", 0),
-            "link": f"https://bugs.mojang.com/browse/{key}"
+            "link": f"https://bugs.mojang.com/browse/{key}",
+            "snippet": issue.get("snippet", ""),
+            "labels": issue.get("labels") or [],
+            "fix_versions": issue.get("fixVersions") or [],
+            "affected_versions": issue.get("affectedVersions") or [],
+            "confirmation_status": issue.get("confirmationStatus", ""),
         }
         
         point_id = _key_to_uuid(key)

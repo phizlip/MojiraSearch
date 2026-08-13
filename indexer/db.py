@@ -9,6 +9,7 @@ All timestamps stored as ISO-8601 UTC strings.
 """
 
 import logging
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -34,7 +35,12 @@ CREATE TABLE IF NOT EXISTS issues (
     indexed         INTEGER NOT NULL DEFAULT 0,
     http_status     INTEGER NOT NULL DEFAULT 200,
     duplicate_of    TEXT
-        REFERENCES issues(key) ON DELETE SET NULL
+        REFERENCES issues(key) ON DELETE SET NULL,
+    labels              TEXT,
+    fix_versions        TEXT,
+    affected_versions   TEXT,
+    confirmation_status TEXT,
+    snippet             TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_issues_project    ON issues(project);
@@ -68,6 +74,22 @@ def open_db(path: str = DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     conn.commit()
+
+    # Add missing columns for existing databases.
+    _MIGRATIONS = [
+        "ALTER TABLE issues ADD COLUMN labels TEXT",
+        "ALTER TABLE issues ADD COLUMN fix_versions TEXT",
+        "ALTER TABLE issues ADD COLUMN affected_versions TEXT",
+        "ALTER TABLE issues ADD COLUMN confirmation_status TEXT",
+        "ALTER TABLE issues ADD COLUMN snippet TEXT",
+    ]
+    for sql in _MIGRATIONS:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
     logger.debug("Opened DB at %s", path)
     return conn
 
@@ -88,22 +110,33 @@ def upsert_issue(conn: sqlite3.Connection, issue: dict, indexed: bool, http_stat
     key = issue["key"]
     project = key.split("-")[0]
     now = _now_iso()
+
+    labels = json.dumps(issue.get("labels") or [])
+    fix_versions = json.dumps(issue.get("fixVersions") or [])
+    affected_versions = json.dumps(issue.get("affectedVersions") or [])
+
     with transaction(conn):
         conn.execute(
             """
             INSERT INTO issues
                 (key, project, summary, description, resolution, status,
-                 created_date, updated_date, last_fetched, indexed, http_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_date, updated_date, last_fetched, indexed, http_status,
+                 labels, fix_versions, affected_versions, confirmation_status, snippet)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
-                summary      = excluded.summary,
-                description  = excluded.description,
-                resolution   = excluded.resolution,
-                status       = excluded.status,
-                updated_date = excluded.updated_date,
-                last_fetched = excluded.last_fetched,
-                indexed      = excluded.indexed,
-                http_status  = excluded.http_status
+                summary             = excluded.summary,
+                description         = excluded.description,
+                resolution          = excluded.resolution,
+                status              = excluded.status,
+                updated_date        = excluded.updated_date,
+                last_fetched        = excluded.last_fetched,
+                indexed             = excluded.indexed,
+                http_status         = excluded.http_status,
+                labels              = excluded.labels,
+                fix_versions        = excluded.fix_versions,
+                affected_versions   = excluded.affected_versions,
+                confirmation_status = excluded.confirmation_status,
+                snippet             = excluded.snippet
             """,
             (
                 key,
@@ -117,6 +150,11 @@ def upsert_issue(conn: sqlite3.Connection, issue: dict, indexed: bool, http_stat
                 now,
                 1 if indexed else 0,
                 http_status,
+                labels,
+                fix_versions,
+                affected_versions,
+                issue.get("confirmationStatus"),
+                issue.get("snippet"),
             ),
         )
 

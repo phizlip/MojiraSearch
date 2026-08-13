@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 from dotenv import load_dotenv
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -18,7 +19,7 @@ from indexer.db import (
     update_crawl_state, upsert_issue, upsert_missing, set_delta_sync_time, set_indexed, get_delta_sync_time
 )
 from indexer.fetcher import fetch_issue, fetch_recent_keys_jql
-from indexer.parser import build_embed_text, should_embed
+from indexer.parser import build_embed_text, should_embed, parse_description
 from indexer.embedder import embed_documents
 from api.qdrant_client import init_collection, upsert_issues, delete_issues
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 PROJECTS = os.getenv("PROJECTS", "MC,MCPE").split(",")
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 IDLE_SLEEP = 300
-MAX_CONTIGUOUS_MISSING = 15
+MAX_CONTIGUOUS_MISSING = 50
 MISSING_KEY_TTL_HOURS = 48.0
 
 STATUS_FILE = os.path.join(os.getenv("DATA_DIR", "./data"), "worker_status.json")
@@ -41,8 +42,11 @@ def set_worker_status(project: str, phase: str, details: str = "") -> None:
             "details": details,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
-        with open(STATUS_FILE, "w") as f:
+        dir_name = os.path.dirname(STATUS_FILE) or "."
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, suffix=".tmp") as f:
             json.dump(status, f)
+            tmp_path = f.name
+        os.replace(tmp_path, STATUS_FILE)
     except Exception as e:
         logger.error("Failed to write worker status: %s", e)
 
@@ -87,6 +91,9 @@ async def process_batch(keys: list[str], session: aiohttp.ClientSession, conn: s
 
             if "key" not in data:
                 data["key"] = key
+
+            # Generate description snippet for Qdrant payload and SQLite storage
+            data["snippet"] = parse_description(data.get("description", ""))[:300].strip()
 
             success_count += 1
 

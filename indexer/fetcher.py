@@ -359,11 +359,11 @@ async def fetch_recent_keys_jql(
                         break
                 else:
                     logger.error("JQL delta_sync returned %d for %s", resp.status, project)
-                    return set()
+                    raise Exception(f"JQL API returned {resp.status}")
         return set(keys)
     except Exception as exc:
         logger.error("JQL delta_sync network error for %s: %s", project, exc)
-        return set()
+        raise exc
 
 
 async def fetch_issues_batch(

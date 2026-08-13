@@ -171,7 +171,12 @@ async def delta_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3
     last_sync = get_delta_sync_time(conn, project)
     logger.info("Delta sync %s: checking recently updated since %s...", project, last_sync)
     set_worker_status(project, "Delta Sync", f"Fetching updated issues since {last_sync}...")
-    recent_keys = await fetch_recent_keys_jql(session, project, last_sync or "")
+    try:
+        recent_keys = await fetch_recent_keys_jql(session, project, last_sync or "")
+    except Exception as e:
+        logger.error("Delta sync failed for %s: %s. Aborting sync cycle to preserve state.", project, e)
+        return 0, 0
+
     if not recent_keys:
         return 0, 0
 

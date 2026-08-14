@@ -23,8 +23,17 @@ def get_model() -> SentenceTransformer:
         import torch
         logger.info("Loading embedding model %s (trust_remote_code=True)...", MODEL_NAME)
         torch.set_num_threads(EMBEDDING_THREADS)
-        # MPS will use 100% of unified memory on MacOS
-        device = "cpu"
+        # Detects best available device. Override with EMBEDDING_DEVICE env var.
+        env_device = os.getenv("EMBEDDING_DEVICE", "").strip()
+        if env_device:
+            device = env_device
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
+        logger.info("Using embedding device: %s", device)
         _model = SentenceTransformer(MODEL_NAME, device=device, trust_remote_code=True)
         _model.eval()
     return _model

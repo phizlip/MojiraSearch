@@ -28,7 +28,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000
 The indexer runs two passes per project on each cycle:
 
 - **Delta sync**: queries Jira's public JQL endpoint for recently updated issues based on the last sync timestamp.
-- **Forward sync**: crawls forward from the highest known key until hitting 15 consecutive 404s, bridging any gaps found during the delta sync. Keys confirmed as missing are cached for 48 hours to avoid redundant requests.
+- **Forward sync**: crawls forward from the highest known key until hitting a certain threshold consecutive 404s, filling any gaps found during the delta sync.
 
 ## Duplicate detection
 

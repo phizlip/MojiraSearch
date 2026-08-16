@@ -41,4 +41,4 @@ Claude Sonnet 4.6 by Anthropic was used across various parts of development. Com
 ## Credits
 
 - Issue data via [mojira.dev](https://github.com/misode/mojira.dev) by [Misode](https://github.com/misode)
-- Icons by [Primer Octicons](https://primer.style/octicons/)
+- Icons and favicon by [Primer Octicons](https://primer.style/octicons/)

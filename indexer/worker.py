@@ -18,7 +18,7 @@ from indexer.db import (
     open_db, get_issue, get_max_key_num, get_recently_missing_keys,
     update_crawl_state, upsert_issue, upsert_missing, set_delta_sync_time, set_indexed, get_delta_sync_time
 )
-from indexer.fetcher import fetch_issue, fetch_recent_keys_jql
+from indexer.fetcher import DELTA_SYNC_OVERLAP_HOURS, fetch_issue, fetch_recent_keys_jql
 from indexer.parser import build_embed_text, should_embed, parse_description
 from indexer.embedder import embed_documents
 from api.qdrant_client import init_collection, upsert_issues, delete_issues
@@ -176,8 +176,8 @@ async def forward_sync(project: str, session: aiohttp.ClientSession, conn: sqlit
 async def delta_sync(project: str, session: aiohttp.ClientSession, conn: sqlite3.Connection) -> tuple[int, int]:
     """Reindex recently updated issues. Returns (embedded_count, max_id_seen)."""
     last_sync = get_delta_sync_time(conn, project)
-    logger.info("Delta sync %s: checking recently updated since %s...", project, last_sync)
-    set_worker_status(project, "Delta Sync", f"Fetching updated issues since {last_sync}...")
+    logger.info("Delta sync %s: checking updates from the last %sh...", project, DELTA_SYNC_OVERLAP_HOURS)
+    set_worker_status(project, "Delta Sync", f"Fetching updates from the last {DELTA_SYNC_OVERLAP_HOURS:g}h...")
     try:
         recent_keys = await fetch_recent_keys_jql(session, project, last_sync or "")
     except Exception as e:

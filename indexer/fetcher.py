@@ -18,6 +18,7 @@ FETCH_CONCURRENCY = int(os.getenv("FETCH_CONCURRENCY", "5"))
 RATE_LIMIT_RPS = float(os.getenv("FETCH_RPS", "5.0"))
 # Rate limit for bugs.mojang.com JQL calls (delta sync + fallback)
 JQL_RATE_LIMIT_RPS = float(os.getenv("JQL_FETCH_RPS", "3.0"))
+DELTA_SYNC_OVERLAP_HOURS = float(os.getenv("DELTA_SYNC_OVERLAP_HOURS", "2"))
 
 _BACKOFF_BASE = 2.0
 _BACKOFF_MAX = 60.0
@@ -326,17 +327,10 @@ async def fetch_issue(
 async def fetch_recent_keys_jql(
     session: aiohttp.ClientSession,
     project: str,
-    last_sync_time: str,
+    _last_sync_time: str,
 ) -> set[str]:
-    """Fetch recently updated issue keys directly from Jira JQL."""
-    try:
-        import datetime
-        dt = datetime.datetime.fromisoformat(last_sync_time)
-        jql_date = dt.strftime("%Y-%m-%d %H:%M")
-        jql = f'project = {project} AND updated >= "{jql_date}" ORDER BY updated DESC'
-    except Exception as e:
-        logger.warning("Failed to parse last_sync_time %r: %s", last_sync_time, e)
-        jql = f'project = {project} AND updated >= "-48h" ORDER BY updated DESC'
+    """Fetch recently updated keys."""
+    jql = f'project = {project} AND updated >= "-{DELTA_SYNC_OVERLAP_HOURS:g}h" ORDER BY updated DESC'
 
     keys = []
     page = 0

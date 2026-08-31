@@ -42,3 +42,7 @@ Claude Sonnet 4.6 by Anthropic was used across various parts of development. Com
 
 - Issue data via [mojira.dev](https://github.com/misode/mojira.dev) by [Misode](https://github.com/misode)
 - Icons and favicon by [Primer Octicons](https://primer.style/octicons/)
+
+## License
+
+MojiraSearch is available under the [MIT License](LICENSE).

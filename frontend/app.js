@@ -22,7 +22,7 @@ window.onload = () => {
 function getIssueUrl(key) {
     const tracker = openWith.value;
     if (tracker === 'bugs_legacy') return `https://bugs-legacy.mojang.com/browse/${key}`;
-    if (tracker === 'bugs')        return `https://bugs.mojang.com/browse/${key}`;
+    if (tracker === 'bugs')        return `https://bugs.mojang.com/browse/${key.split('-')[0]}/issues/${key}`;
     if (tracker === 'report')      return `https://report.bugs.mojang.com/servicedesk/customer/portal/2/${key}`;
     if (tracker === 'atlassian')   return `https://mojira.atlassian.net/browse/${key}`;
     return `https://mojira.dev/${key}`;
@@ -103,7 +103,7 @@ function renderStatus(data) {
     // breakdown by project
     let projectHtml = '';
     const projects = data.projects || {};
-    const displayOrder = ["MC", "MCPE", "MCL", "REALMS", "WEB", "BDS"];
+    const displayOrder = ["MC", "MCPE", "MCL", "REALMS", "WEB", "BDS", "MCD2"];
 
     for (const project of displayOrder) {
         const stats = projects[project];

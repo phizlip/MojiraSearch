@@ -88,7 +88,7 @@ def upsert_issues(issues: List[Dict[str, Any]], vectors: List[List[float]]) -> N
             "status": issue.get("status"),
             "updated_date": issue.get("updated_date"),
             "votes": issue.get("votes", 0),
-            "link": f"https://bugs.mojang.com/browse/{key}",
+            "link": f"https://bugs.mojang.com/browse/{project}/issues/{key}",
             "snippet": issue.get("snippet", ""),
             "labels": issue.get("labels") or [],
             "fix_versions": issue.get("fixVersions") or [],

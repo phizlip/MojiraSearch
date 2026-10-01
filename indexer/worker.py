@@ -25,7 +25,7 @@ from api.qdrant_client import init_collection, upsert_issues, delete_issues
 
 logger = logging.getLogger(__name__)
 
-PROJECTS = os.getenv("PROJECTS", "MC,MCPE").split(",")
+PROJECTS = os.getenv("PROJECTS", "MC,MCPE,MCD2").split(",")
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
 IDLE_SLEEP = 300
 MAX_CONTIGUOUS_MISSING = 50
